@@ -63,7 +63,7 @@ public:
 
     template <class... Args>
     RCPool(size_t idle_limit_, size_t max_limit_, Args&&... _args) {
-        inner_pool_ = std::make_shared<InnerRCPool> (idle_limit_, max_limit_, _args...);
+        inner_pool_ = std::make_shared<InnerRCPool> (idle_limit_, max_limit_, std::forward<Args>(_args)...);
     }
 
     // disallow copy
