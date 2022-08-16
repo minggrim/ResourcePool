@@ -35,7 +35,10 @@ public:
 
             GetWrapper & operator=(GetWrapper && rhs) {
                 // release mine
-                rcpool_.inner_put(ptr_);
+                if (ptr_) {
+                    rcpool_.inner_put(ptr_);
+                    ptr_ = nullptr;
+                }
 
                 // inherit other
                 ptr_ = rhs.ptr_;
@@ -56,6 +59,11 @@ public:
             INST_T * operator->() {
                 return ptr_.get();
             }
+
+            INST_T * get() {
+                return ptr_.get();
+            }
+
         private:
             std::shared_ptr<typename RCPool<INST_T>::InnerRCPool> rcpool_;
             std::shared_ptr<INST_T> ptr_;
