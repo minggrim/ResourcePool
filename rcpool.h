@@ -7,9 +7,20 @@
 #include <condition_variable>
 #include <functional>
 #include <cstddef>
+#include <exception>
+#include <string>
 
 
 namespace mklib {
+
+class GenericResourceException : public std::exception {
+    public:
+        GenericResourceException(const std::string & m) : msg_(m) {}
+        const char * what() const noexcept {return msg_.c_str();}
+    private:
+        std::string msg_;
+};
+
 template <class INST_T>
 class RCPool
 {
@@ -132,7 +143,13 @@ private:
                 unused.erase(unused.begin());
             }
             else {
-                this_get = factory();
+                try {
+                    this_get = factory();
+                }
+                catch (const std::exception & e) {
+                    // wrap throw
+                    throw GenericResourceException(e.what());
+                }
                 cur_sz++;
             }
 
@@ -146,15 +163,16 @@ private:
             auto p = used.find(ptr.get());
             if (p == used.end()) return;
 
-            used.erase(p);
-
             // back to used if < idle_limit
-            if (used.size() < idle_limit) {
-                unused.emplace(p->second.get(), ptr);
-            }
-            else {
+            if (used.size() > idle_limit) {
                 cur_sz--;
             }
+            else {
+                unused.emplace(p->second.get(), ptr);
+            }
+
+            // erase from used
+            used.erase(p);
 
             uq_cvlock.unlock();
             cv.notify_one();
