@@ -22,17 +22,32 @@ namespace {
         private:
             std::string msg_;
     };
+
+    class ResourceTimedoutException : public std::exception {
+        public:
+            ResourceTimedoutException(const std::string & m) : msg_(m) {}
+            const char * what() const noexcept {return msg_.c_str();}
+        private:
+            std::string msg_;
+    };
 }
 
 template <class INST_T>
 class RCPool
 {
 public:
+    enum class GetStatus {
+        SUCCESS,
+        CTORF,
+        TIMEOUT,
+        UNKNOWN
+    };
+
     class GetWrapper {
         public:
             GetWrapper(
-                std::shared_ptr<typename RCPool<INST_T>::InnerRCPool> pool, std::shared_ptr<INST_T> ptr) :
-                rcpool_(pool), ptr_(ptr)
+                std::shared_ptr<typename RCPool<INST_T>::InnerRCPool> pool, std::shared_ptr<INST_T> ptr, GetStatus err) :
+                rcpool_(pool), ptr_(ptr), err_(err)
             {}
 
             // disallow copy
@@ -82,9 +97,27 @@ public:
                 return ptr_;
             }
 
+            GetStatus err() {
+                return err_;
+            }
+
+            const char* explain_error() {
+                switch (err_) {
+                    case GetStatus::SUCCESS: return "Success";
+                    break;
+                    case GetStatus::CTORF: return "Resource construct failed";
+                    break;
+                    case GetStatus::TIMEOUT: return "Wait resource timeout";
+                    break;
+                    case GetStatus::UNKOWN: return "Unknow fialure";
+                    break;
+                }
+            }
+
         private:
             std::shared_ptr<typename RCPool<INST_T>::InnerRCPool> rcpool_;
             std::shared_ptr<INST_T> ptr_;
+            GetStatus err_;
     };
 
     template <class... Args>
@@ -104,10 +137,16 @@ public:
 
     GetWrapper get(uint32_t timeout_s = 0) {
         try {
-            return { inner_pool_, inner_pool_->inner_get(timeout_s)};
+            return { inner_pool_, inner_pool_->inner_get(timeout_s), GetStatus::SUCCESS};
+        }
+        catch (const ResourceTimedoutException &e) {
+            return { nullptr, nullptr, GetStatus::TIMEOUT };
         }
         catch (const GenericResourceException &e) {
-            return { nullptr, nullptr };
+            return { nullptr, nullptr, GetStatus::CTORF};
+        }
+        catch (...) {
+            return { nullptr, nullptr, GetStatus::UNKNOWN };
         }
     }
 
@@ -150,7 +189,7 @@ private:
                             [this]() -> bool { return resource_available(); }
                          );
                 if (!t) {
-                    throw GenericResourceException("Timedout");
+                    throw ResourceTimedoutException("Timedout");
                 }
             }
             else {
