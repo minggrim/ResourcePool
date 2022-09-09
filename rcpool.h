@@ -9,17 +9,20 @@
 #include <cstddef>
 #include <exception>
 #include <string>
+#include <chrono>
 
 
 namespace mklib {
 
-class GenericResourceException : public std::exception {
-    public:
-        GenericResourceException(const std::string & m) : msg_(m) {}
-        const char * what() const noexcept {return msg_.c_str();}
-    private:
-        std::string msg_;
-};
+namespace {
+    class GenericResourceException : public std::exception {
+        public:
+            GenericResourceException(const std::string & m) : msg_(m) {}
+            const char * what() const noexcept {return msg_.c_str();}
+        private:
+            std::string msg_;
+    };
+}
 
 template <class INST_T>
 class RCPool
@@ -75,6 +78,10 @@ public:
                 return ptr_.get();
             }
 
+            operator bool() {
+                return ptr_;
+            }
+
         private:
             std::shared_ptr<typename RCPool<INST_T>::InnerRCPool> rcpool_;
             std::shared_ptr<INST_T> ptr_;
@@ -95,9 +102,13 @@ public:
 
     virtual ~RCPool() {}
 
-    GetWrapper get() {
-        GetWrapper gw { inner_pool_, inner_pool_->inner_get()};
-        return gw;
+    GetWrapper get(uint32_t timeout_s = 0) {
+        try {
+            return { inner_pool_, inner_pool_->inner_get(timeout_s)};
+        }
+        catch (const GenericResourceException &e) {
+            return { nullptr, nullptr };
+        }
     }
 
     size_t size() {
@@ -128,12 +139,25 @@ private:
         private:
         friend class RCPool;
         friend class GetWrapper;
-        std::shared_ptr<INST_T> inner_get() {
+
+        std::shared_ptr<INST_T> inner_get(uint32_t timeout_s) {
+
             std::unique_lock<std::mutex> uq_cvlock(cvlock);
-            get_item:
-            if (unused.size() == 0 && cur_sz >= max_limit) {
-                cv.wait(uq_cvlock);
-                goto get_item;
+            if (timeout_s) {
+                auto t = cv.wait_until(
+                            uq_cvlock,
+                            std::chrono::steady_clock::now() + std::chrono::seconds(timeout_s),
+                            [this]() -> bool { return resource_available(); }
+                         );
+                if (!t) {
+                    throw GenericResourceException("Timedout");
+                }
+            }
+            else {
+                cv.wait(
+                    uq_cvlock,
+                    [this]() -> bool { return resource_available(); }
+                );
             }
 
             std::shared_ptr<INST_T> this_get = nullptr;
@@ -176,6 +200,10 @@ private:
 
             uq_cvlock.unlock();
             cv.notify_one();
+        }
+
+        bool resource_available() {
+            return cur_sz < max_limit;
         }
 
         size_t idle_limit;
